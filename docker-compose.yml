@@ -1,0 +1,45 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: tagger_mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  api:
+    build: ./backend
+    container_name: tagger_api
+    restart: unless-stopped
+    environment:
+      - MONGO_URI=mongodb://mongo:27017
+      - MONGO_DB=tagger
+      - SEFARIA_BASE=https://www.sefaria.org
+      - RASHI_TESSDATA_DIR=/data
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mongo
+    volumes:
+      - ./data:/data:ro
+      - ./.env:/app/.env:ro
+
+  vlm_mock:
+    build: ./vlm_mock
+    container_name: tagger_vlm_mock
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+
+  frontend:
+    build: ./frontend
+    container_name: tagger_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
+volumes:
+  mongo_data:

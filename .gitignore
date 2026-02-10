@@ -1,0 +1,40 @@
+# Env and secrets (create .env from .env.example, add OPENAI_API_KEY)
+.env
+.env.local
+.env.*.local
+
+# Commentary filter (copy commentary_config.example.json to commentary_config.json and edit)
+commentary_config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build / Docker (optional)
+*.log
+.mongo_data/
