@@ -39,8 +39,11 @@ def vlm_classify_block_font(
     out: Dict[str, Literal["hebrew", "rashi"]] = {}
 
     prompt = (
-        "Does this image show a block of text in regular Hebrew font or in Rashi script? "
-        "Answer with exactly one word: hebrew or rashi."
+        "Classify the dominant script in this cropped block.\n"
+        "Answer exactly one word: hebrew or rashi.\n"
+        "hebrew = standard square Hebrew letters.\n"
+        "rashi = Rashi script used in commentaries.\n"
+        "If unsure, still choose the best of the two."
     )
 
     # Safety thresholds to avoid 400 '$.input is invalid' due to empty/huge images
