@@ -1,6 +1,3 @@
-"""
-Line OCR via OpenAI Vision only. API key from .env via load_dotenv in config.
-"""
 from __future__ import annotations
 
 import base64
@@ -87,7 +84,7 @@ def vlm_classify_block_font(
                             ],
                         }
                     ],
-                    max_output_tokens=8,
+                    max_output_tokens=16,
                 )
 
                 raw = _normalize_answer(resp.output_text)
