@@ -7,7 +7,7 @@ from typing import List, Dict, Tuple, Literal
 
 from PIL import Image
 import time
-import re
+import math
 from openai import OpenAI
 
 from config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_TIMEOUT_S, OPENAI_MAX_RETRIES
@@ -20,54 +20,62 @@ def _img_to_b64_png(img: Image.Image) -> str:
     img.save(buf, format="PNG", optimize=True)
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
+
 def vlm_classify_block_font(
     block_items: List[Tuple[str, Image.Image]],
 ) -> Dict[str, Literal["hebrew", "rashi"]]:
+    """
+    block_items: [(block_id, PIL_crop), ...]
+    returns: { block_id: "hebrew" | "rashi" }
+    """
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is required. Add it to .env and load with load_dotenv.")
 
-    # Sanity check: prevent accidental non-vision model usage
+    # Optional but highly recommended: fail fast if you accidentally configured a non-vision model
     if not isinstance(OPENAI_MODEL, str) or "4o" not in OPENAI_MODEL:
-        raise RuntimeError(f"OPENAI_MODEL looks wrong for vision: {OPENAI_MODEL!r}")
+        raise RuntimeError(f"OPENAI_MODEL doesn't look like a vision-capable 4o model: {OPENAI_MODEL!r}")
 
     client = OpenAI(api_key=OPENAI_API_KEY, timeout=OPENAI_TIMEOUT_S)
     out: Dict[str, Literal["hebrew", "rashi"]] = {}
 
     prompt = (
-        "Classify the dominant script in this cropped block.\n"
-        "Answer exactly one word: hebrew or rashi.\n"
-        "hebrew = standard square Hebrew letters.\n"
-        "rashi = Rashi script used in commentaries.\n"
-        "If unsure, still choose the best of the two."
+        "Does this image show a block of text in regular Hebrew font or in Rashi script? "
+        "Answer with exactly one word: hebrew or rashi."
     )
 
-    def _normalize_answer(s: str) -> str:
-        s = (s or "").strip().lower()
-        # keep only letters
-        s = re.sub(r"[^a-z]", "", s)
-        return s
-
-    def _prep_img(img: Image.Image) -> Image.Image:
-        # Ensure RGB
-        im = img.convert("RGB")
-
-        # Add padding (helps a lot)
-        pad = 20
-        padded = Image.new("RGB", (im.width + 2 * pad, im.height + 2 * pad), (255, 255, 255))
-        padded.paste(im, (pad, pad))
-
-        # Enforce minimum size by upscaling (avoid tiny unreadable crops)
-        min_w, min_h = 512, 256
-        scale = max(min_w / padded.width, min_h / padded.height, 1.0)
-        if scale > 1.0:
-            new_size = (int(padded.width * scale), int(padded.height * scale))
-            padded = padded.resize(new_size, resample=Image.LANCZOS)
-
-        return padded
+    # Safety thresholds to avoid 400 '$.input is invalid' due to empty/huge images
+    MIN_W, MIN_H = 20, 20
+    MAX_PIXELS = 2_000_000  # cap area to keep the data URL reasonable (tune if needed)
 
     for bid, img in block_items:
-        img2 = _prep_img(img)
+        # ---- Validation: image must be present and non-trivial ----
+        if img is None:
+            out[bid] = "hebrew"
+            continue
+
+        if getattr(img, "width", 0) < MIN_W or getattr(img, "height", 0) < MIN_H:
+            out[bid] = "hebrew"
+            continue
+
+        # Ensure RGB (avoid odd modes causing encoding issues)
+        img2 = img.convert("RGB")
+
+        # ---- Validation: cap image size to prevent huge base64 data URLs ----
+        area = img2.width * img2.height
+        if area > MAX_PIXELS:
+            scale = math.sqrt(MAX_PIXELS / float(area))
+            new_w = max(MIN_W, int(img2.width * scale))
+            new_h = max(MIN_H, int(img2.height * scale))
+            img2 = img2.resize((new_w, new_h), resample=Image.LANCZOS)
+
+        # Encode
         b64 = _img_to_b64_png(img2)
+
+        # ---- Validation: base64 must be non-empty ----
+        if not b64 or len(b64) < 100:
+            out[bid] = "hebrew"
+            continue
+
         data_url = f"data:image/png;base64,{b64}"
 
         last_err = None
@@ -87,26 +95,28 @@ def vlm_classify_block_font(
                     max_output_tokens=16,
                 )
 
-                raw = _normalize_answer(resp.output_text)
-                if raw in ("hebrew", "rashi"):
-                    out[bid] = raw  # type: ignore[assignment]
-                    break
+                raw = (resp.output_text or "").strip().lower()
 
-                # If model didn't follow instruction, retry once with stronger constraint
-                if attempt < OPENAI_MAX_RETRIES:
-                    continue
+                # More robust parse: accept only exact labels (strip punctuation)
+                raw_clean = "".join(ch for ch in raw if ch.isalpha())
 
-                # Final fallback: default hebrew (or choose rashi, but be explicit)
-                out[bid] = "hebrew"
+                if raw_clean == "rashi":
+                    out[bid] = "rashi"
+                elif raw_clean == "hebrew":
+                    out[bid] = "hebrew"
+                else:
+                    # If model didn't follow instruction, default (or you can retry with a stricter prompt)
+                    out[bid] = "hebrew"
+
                 break
 
             except Exception as e:
                 last_err = e
                 if attempt < OPENAI_MAX_RETRIES:
                     time.sleep(min(2 ** (attempt - 1), 8))
-                else:
-                    # Keep your behavior: default then raise
-                    out[bid] = "hebrew"
-                    raise RuntimeError(f"OpenAI block font failed for {bid}: {last_err}") from last_err
+        else:
+            out[bid] = "hebrew"
+            if last_err:
+                raise RuntimeError(f"OpenAI block font failed for {bid}: {last_err}") from last_err
 
     return out
